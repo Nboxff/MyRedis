@@ -11,6 +11,8 @@
 #include <netinet/ip.h>
 #include <assert.h>
 #include <vector>
+#include <string>
+#include <map>
 #include "constants.h"
 #include "utils.h"
 
@@ -94,6 +96,104 @@ static int32_t write_all(int fd, const char *buf, size_t n) {
 static void state_req(Conn *conn);
 static void state_res(Conn *conn);
 
+static int32_t parse_req(const uint8_t *data, size_t len, std::vector<std::string> &out) {
+    if (len < 4) return -1;
+
+    uint32_t argc = 0;
+    memcpy(&argc, &data[0], 4);
+    if (argc > K_MAX_ARGS) {
+        return -1;
+    }
+
+    size_t pos = 4;
+    for (uint32_t i = 0; i < argc; i++) {
+        if (pos + 4 > len) {
+            return -1;
+        }
+        uint32_t arg_len = 0;
+        memcpy(&arg_len, &data[pos], 4);
+        if (pos + 4 + arg_len > len) {
+            return -1;
+        }
+        out.push_back(std::string((char*) &data[pos + 4], arg_len));
+        pos += arg_len + 4;
+    }
+
+    if (pos != len) {
+        // trailing garbage
+        return -1;
+    }
+    return 0;
+}
+
+static std::map<std::string, std::string> g_map;
+
+static uint32_t do_get(
+    const std::vector<std::string> &cmd, 
+    uint8_t *res, uint32_t *reslen) {
+    if (!g_map.count(cmd[1])) {
+        return RES_NX;
+    }
+
+    std::string &val = g_map[cmd[1]];
+    assert(val.size() <= K_MAX_MSG);
+    memcpy(res, val.data(), val.size());
+    *reslen = (uint32_t) val.size();
+    return RES_OK;
+}
+
+static uint32_t do_set(
+    const std::vector<std::string> &cmd, 
+    uint8_t *res, uint32_t *reslen) {
+
+    g_map[cmd[1]] = g_map[cmd[2]];
+    return RES_OK;
+}
+
+static uint32_t do_del(
+    const std::vector<std::string> &cmd, 
+    uint8_t *res, uint32_t *reslen) {
+
+    g_map.erase(cmd[1]);
+    return RES_OK;
+}
+
+static bool cmd_is(const std::string &word, const char * cmd) {
+    return 0 == strcasecmp(word.c_str(), cmd);
+}
+
+/**
+ * recognize get, set, del
+ * @return return -1 if bad req
+*/
+static int32_t do_request(const uint8_t *req, 
+    uint32_t reqlen, uint32_t *rescode,
+    uint8_t *res, uint32_t *reslen) {
+        // split instruction like: ["get", "apple"]
+        std::vector<std::string> cmd;  
+        if (parse_req(req, reqlen, cmd)) {
+            msg("bad req");
+            return -1;
+        }
+
+        if (cmd.size() == 2 && cmd_is(cmd[0], "get")) {
+            *rescode = do_get(cmd, res, reslen);
+        } else if (cmd.size() == 3 && cmd_is(cmd[0], "set")) {
+            *rescode = do_set(cmd, res, reslen);
+        } else if (cmd.size() == 2 && cmd_is(cmd[0], "del")) {
+            *rescode = do_del(cmd, res, reslen);
+        } else {
+            // cmd is not recognized
+            *rescode = RES_ERR;
+            const char *msg = "Unknown cmd";
+            strcpy((char *) res, msg);
+            *reslen = strlen(msg);
+            return 0;
+        }
+    return 0;
+}
+
+
 static int32_t try_one_request(Conn *conn) {
     // 4 bytes header, like this:
     // +-----+------+-----+------+--------
@@ -117,13 +217,28 @@ static int32_t try_one_request(Conn *conn) {
         return false;
     }
 
-    // got one request, do something with it
-    printf("client says: %.*s\n", len, conn->rbuf + 4);
+    // got one request, generate the response
+    uint32_t rescode = 0;
+    uint32_t wlen = 0;
 
-    // generating echoing response
-    memcpy(conn->wbuf, &len, 4);
-    memcpy(conn->wbuf + 4, conn->rbuf + 4, len);
-    conn->wbuf_size = len + 4;
+    // format of response:
+    // +-----+---------+
+    // | res | data... |
+    // +-----+---------+
+    int32_t err = do_request(
+        conn->rbuf + 4, len, 
+        &rescode, conn->wbuf + 4 + 4, &wlen
+    );
+
+    if (err) {
+        conn->state = STATE_END;
+        return false;
+    }
+
+    wlen += 4;
+    memcpy(conn->wbuf, &wlen, 4);
+    memcpy(conn->wbuf + 4, &rescode, 4); // res
+    conn->wbuf_size = wlen + 4;
 
     // remove the request from the buffer
     // note: frequent memmove is inefficient.
