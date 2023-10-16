@@ -68,6 +68,35 @@ static int32_t send_req(int fd, const std::vector<std::string> &cmd) {
     return write_all(fd, wbuf, len + 4);
 }
 
+static int32_t on_response(const uint8_t *data, size_t size) {
+    if (size < 1) {
+        msg("bad response");
+        return -1;
+    }
+    switch (data[0]) {
+    case SER_NIL:
+        printf("(nil)\n");
+        return 1;
+    case SER_ERR:
+        if (size < 1 + 8) {
+            msg("bad response");
+            return -1;
+        }
+        int32_t code = 0;
+        uint32_t len = 0;
+        memcpy(&code, data + 1, 4);
+        memcpy(&len, data + 1 + 4, 4);
+        if (size < 1 + 8 + len) {
+            msg("bad response");
+            return -1;
+        }
+        printf("(err) %d %.*s\n", code, len, &data[1 + 8]);
+        return 1 + 8 + len;
+    default:
+        break;
+    }
+}
+
 static int32_t read_res(int fd) {
     char rbuf[4 + K_MAX_MSG + 1];
     errno = 0;
