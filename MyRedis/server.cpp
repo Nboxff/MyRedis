@@ -190,6 +190,9 @@ static void out_arr(std::string &out, uint32_t n) {
     out.append((char *)&n, 4);
 }
 
+static void h_scan(HTab *tab, void (*f)(HNode *, void *), void *arg);
+static void cb_scan(HNode *node, void *arg);
+
 static void do_get(
     std::vector<std::string> &cmd, 
     std::string &out) {
