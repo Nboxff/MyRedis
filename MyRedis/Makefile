@@ -4,3 +4,9 @@ compile:
 
 clean:
 	rm client server
+
+test:
+	g++ -Wall -Wextra -O2 -g test_avl.cpp -o test_avl
+	./test_avl
+
+.PHONY: test clean
