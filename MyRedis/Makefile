@@ -3,7 +3,7 @@ compile:
 	g++ -Wall -Wextra -O2 -g client.cpp utils.cpp -o client
 
 clean:
-	rm client server
+	rm client server test_avl
 
 test:
 	g++ -Wall -Wextra -O2 -g test_avl.cpp -o test_avl
